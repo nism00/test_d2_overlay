@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; font-family: 'Segoe UI', sans-serif; }
+        body { background: #0f1318; color: #e6edf3; border: 1px solid #262e3a; border-radius: 10px; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+        .header { background: linear-gradient(90deg, #181f29, #1f2733); padding: 7px 12px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #262e3a; }
+        .hero-name { font-weight: 700; font-size: 13px; color: #f0f6fc; }
+        .close-btn { background: none; border: none; color: #8b949e; font-size: 14px; cursor: pointer; }
+        .close-btn:hover { color: #ff5e57; }
+        .controls { padding: 7px 12px; display: flex; justify-content: space-between; align-items: center; background: #131820; border-bottom: 1px solid #1f2630; }
+        select { background: #1c232e; color: #e6edf3; border: 1px solid #303947; border-radius: 5px; padding: 3px 6px; font-size: 11px; outline: none; }
+        .clock { font-size: 12px; font-weight: 600; color: #8b949e; }
+        .card { padding: 8px 12px; border-bottom: 1px solid #1f2630; }
+        .row-main { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 3px; }
+        .label { font-size: 11px; color: #8b949e; text-transform: uppercase; }
+        .values { font-size: 13px; font-weight: 700; }
+        .gold-text { color: #ffd700; }
+        .target-text { color: #8b949e; font-weight: 500; font-size: 12px; }
+        .badge { display: inline-block; margin-top: 2px; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 700; background: #1c232e; color: #8b949e; }
+        .badge.ahead { background: rgba(46, 204, 113, 0.16); color: #2ecc71; border: 1px solid rgba(46, 204, 113, 0.35); }
+        .badge.behind { background: rgba(231, 76, 60, 0.14); color: #ff6b6b; border: 1px solid rgba(231, 76, 60, 0.3); }
+        .hint { font-size: 9px; color: #484f58; text-align: right; padding: 2px 10px 4px; }
+    </style>
+</head>
+<body>
+<div class="header">
+    <span class="hero-name" id="heroName">Ожидание Dota 2...</span>
+    <button class="close-btn" onclick="pywebview.api.close()">✕</button>
+</div>
+<div class="controls">
+    <div>
+        <span style="font-size: 11px; color: #8b949e; margin-right: 4px;">Роль:</span>
+        <select id="roleSelect" onchange="updateData()">
+            <option value="all">Любая (Общий)</option>
+            <option value="carry">Керри (Safe)</option>
+            <option value="mid">Мид (Mid)</option>
+            <option value="offlane">Оффлейн (Off)</option>
+            <option value="support">Саппорт</option>
+        </select>
+    </div>
+    <span class="clock" id="clockText">00:00</span>
+</div>
+<div class="card">
+    <div class="row-main">
+        <span class="label">GPM</span>
+        <span class="values"><span id="curGpm">0</span> <span class="target-text">/ 99%: <span id="targetGpm">—</span></span></span>
+    </div>
+    <div class="badge" id="gpmBadge">Ожидание матча...</div>
+</div>
+<div class="card">
+    <div class="row-main">
+        <span class="label">Net Worth</span>
+        <span class="values"><span class="gold-text" id="curNw">0</span> <span class="target-text">/ 99%: <span id="targetNw">—</span></span></span>
+    </div>
+    <div class="badge" id="nwBadge">Ожидание матча...</div>
+</div>
+<div class="hint">Alt + ЛКМ для перемещения</div>
+
+<script>
+    function fmt(num) {
+        return Math.round(num).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+    }
+    function formatTime(sec) {
+        const sign = sec < 0 ? "-" : "";
+        const abs = Math.abs(Math.floor(sec));
+        return sign + String(Math.floor(abs / 60)).padStart(2, "0") + ":" + String(abs % 60).padStart(2, "0");
+    }
+    async function updateData() {
+        const role = document.getElementById("roleSelect").value;
+        const resp = await fetch("http://localhost:3000/api/state?role=" + role);
+        const data = await resp.json();
+
+        document.getElementById("heroName").textContent = data.hero_name;
+        document.getElementById("clockText").textContent = formatTime(data.clock_time);
+        document.getElementById("curGpm").textContent = data.gpm;
+        document.getElementById("curNw").textContent = fmt(data.total_gold);
+
+        const gpmBadge = document.getElementById("gpmBadge");
+        const nwBadge = document.getElementById("nwBadge");
+
+        if (data.has_data && data.target_gpm > 0) {
+            document.getElementById("targetGpm").textContent = data.target_gpm;
+            const diffGpm = data.gpm - data.target_gpm;
+            gpmBadge.className = diffGpm >= 0 ? "badge ahead" : "badge behind";
+            gpmBadge.textContent = diffGpm >= 0 ? `▲ ВЫШЕ 99% НА +${diffGpm} GPM` : `▼ Ниже 99% на ${diffGpm} GPM`;
+        }
+        if (data.has_data && data.target_gold > 0) {
+            document.getElementById("targetNw").textContent = fmt(data.target_gold);
+            const diffNw = data.total_gold - data.target_gold;
+            nwBadge.className = diffNw >= 0 ? "badge ahead" : "badge behind";
+            nwBadge.textContent = diffNw >= 0 ? `▲ ОПЕРЕЖЕНИЕ НА +${fmt(diffNw)} ЗОЛОТА` : `▼ Отставание на ${fmt(diffNw)} золота`;
+        }
+    }
+    document.addEventListener("mousedown", (e) => { if (e.button === 0) pywebview.api.start_drag(e.screenX, e.screenY); });
+    document.addEventListener("mousemove", (e) => { pywebview.api.do_drag(e.screenX, e.screenY); });
+    document.addEventListener("mouseup", () => { pywebview.api.stop_drag(); });
+
+    setInterval(updateData, 10000);
+    updateData();
+</script>
+</body>
+</html>
