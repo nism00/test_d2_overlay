@@ -2,6 +2,7 @@ import ctypes
 import json
 import os
 import threading
+import time
 import logging
 import webview
 from flask import Flask, request, jsonify
@@ -13,8 +14,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "gpm_p99.json")
 HTML_FILE = os.path.join(BASE_DIR, "overlay.html")
 
-def is_alt_pressed():
-    return bool(ctypes.windll.user32.GetAsyncKeyState(0x12) & 0x8000)
+def is_shift_pressed():
+    return bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)
 
 def load_benchmarks():
     if not os.path.exists(DATA_FILE):
@@ -121,28 +122,77 @@ def get_state():
 
 win = None
 
+WIDTH = 320
+HEIGHT = 235
+
 class WindowApi:
-    def __init__(self):
-        self.dragging = False
-        self.offset_x = 0
-        self.offset_y = 0
-
-    def start_drag(self, screen_x, screen_y):
-        if is_alt_pressed() and win:
-            self.dragging = True
-            self.offset_x = screen_x - win.x
-            self.offset_y = screen_y - win.y
-
-    def do_drag(self, screen_x, screen_y):
-        if self.dragging and is_alt_pressed() and win:
-            win.move(int(screen_x - self.offset_x), int(screen_y - self.offset_y))
-
-    def stop_drag(self):
-        self.dragging = False
-
     def close(self):
         if win:
             win.destroy()
+
+class POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+def is_lmb_pressed():
+    return bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
+
+def get_cursor_pos():
+    pt = POINT()
+    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+    return pt.x, pt.y
+
+def drag_loop():
+    # Перетаскивание опросом клавиш и курсора, а не событиями WebView:
+    # окно с цветовым ключом не передаёт клики в WebView, поэтому JS-обработчики не срабатывают.
+    dragging = False
+    off_x = off_y = 0
+    while True:
+        time.sleep(0.01)
+        if win is None:
+            continue
+        active = is_shift_pressed() and is_lmb_pressed()
+        cx, cy = get_cursor_pos()
+        if not dragging:
+            if active:
+                wx, wy = win.x, win.y
+                if wx <= cx < wx + WIDTH and wy <= cy < wy + HEIGHT:
+                    dragging = True
+                    off_x, off_y = cx - wx, cy - wy
+        elif active:
+            win.move(cx - off_x, cy - off_y)
+        else:
+            dragging = False
+
+VK_NUMPAD0 = 0x60
+
+def hotkey_loop():
+    # Numpad 0 переключает роль; клавиша не блокируется и доходит до игры.
+    was_down = False
+    while True:
+        time.sleep(0.02)
+        if win is None:
+            continue
+        down = bool(ctypes.windll.user32.GetAsyncKeyState(VK_NUMPAD0) & 0x8000)
+        if down and not was_down:
+            win.evaluate_js("cycleRole()")
+        was_down = down
+
+KEY_COLOR = (255, 0, 255)
+
+def apply_color_key(window):
+    # Импорт внутри функции: System.Drawing доступен только после того, как webview.start()
+    # поднимет .NET-рантайм (pythonnet), поэтому на уровне модуля он не загрузится.
+    from System import Action
+    from System.Drawing import Color
+    key = Color.FromArgb(*KEY_COLOR)
+
+    def apply():
+        window.native.BackColor = key
+        window.native.TransparencyKey = key
+
+    # Обработчики событий pywebview запускаются в отдельном потоке, а WinForms-контрол
+    # нужно менять из GUI-потока, иначе окно зависает.
+    window.native.Invoke(Action(apply))
 
 def start_flask():
     # Слушаем все интерфейсы (и 127.0.0.1, и localhost) на порту 3000
@@ -155,11 +205,16 @@ if __name__ == "__main__":
         "Dota 2 Overlay",
         url=HTML_FILE,
         js_api=api,
-        width=320,
-        height=235,
+        width=WIDTH,
+        height=HEIGHT,
         x=20,
         y=60,
         frameless=True,
+        easy_drag=False,
+        transparent=True,
         on_top=True
     )
+    win.events.shown += lambda: apply_color_key(win)
+    threading.Thread(target=drag_loop, daemon=True).start()
+    threading.Thread(target=hotkey_loop, daemon=True).start()
     webview.start()
